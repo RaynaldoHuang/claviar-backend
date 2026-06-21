@@ -17,7 +17,9 @@ return new class extends Migration
             $table->timestamps();
         });
         Schema::table('sales', function (Blueprint $table) {
-            $table->foreignId('customer_id')->nullable()->after('payout_id')->constrained()->nullOnDelete()->index();
+            $table->foreignId('customer_id')->nullable()->after('payout_id');
+            $table->index('customer_id', 'sales_customer_id_index');
+            $table->foreign('customer_id', 'sales_customer_id_foreign')->references('id')->on('customers')->nullOnDelete();
         });
 
         DB::table('sales')->orderBy('id')->get()->each(function ($sale) {

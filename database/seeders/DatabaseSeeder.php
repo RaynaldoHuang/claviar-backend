@@ -2,9 +2,9 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
 use App\Models\Brand;
 use App\Models\Category;
+use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
@@ -23,10 +23,17 @@ class DatabaseSeeder extends Seeder
             ->map(fn ($name) => Permission::firstOrCreate(['name' => $name, 'guard_name' => 'web']));
         $superAdmin = Role::firstOrCreate(['name' => 'super-admin', 'guard_name' => 'web']);
         $admin = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'web']);
-        $superAdmin->syncPermissions($permissions); $admin->syncPermissions($permissions);
-        $user = User::firstOrCreate(['email' => 'admin@claviar.test'], ['name' => 'Claviar Admin', 'password' => 'password']);
-        $user->syncRoles($superAdmin);
-        foreach (['Tas', 'Sepatu', 'Pakaian', 'Aksesori'] as $name) Category::firstOrCreate(compact('name'));
-        foreach (['Chanel', 'Gucci', 'Louis Vuitton', 'Prada', 'Coach'] as $name) Brand::firstOrCreate(compact('name'));
+        $superAdmin->syncPermissions($permissions);
+        $admin->syncPermissions($permissions);
+        if (! app()->environment('production')) {
+            $user = User::firstOrCreate(['email' => 'admin@claviar.test'], ['name' => 'Claviar Admin', 'password' => 'password']);
+            $user->syncRoles($superAdmin);
+        }
+        foreach (['Tas', 'Sepatu', 'Pakaian', 'Aksesori'] as $name) {
+            Category::firstOrCreate(compact('name'));
+        }
+        foreach (['Chanel', 'Gucci', 'Louis Vuitton', 'Prada', 'Coach'] as $name) {
+            Brand::firstOrCreate(compact('name'));
+        }
     }
 }
