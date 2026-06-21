@@ -7,14 +7,18 @@ use Illuminate\Validation\Rule;
 
 class ProductRequest extends FormRequest
 {
-    public function authorize(): bool { return $this->user()?->can('manage products') ?? false; }
+    public function authorize(): bool
+    {
+        return $this->user()?->can('manage products') ?? false;
+    }
+
     public function rules(): array
     {
         $product = $this->route('product');
+
         return [
             'code' => ['required', 'string', 'max:100', Rule::unique('products')->ignore($product)],
-            'consignor_id' => ['required', 'exists:consignors,id'], 'category_id' => ['required', 'exists:categories,id'],
-            'brand_id' => ['nullable', 'exists:brands,id'], 'name' => ['required', 'string', 'max:255'],
+            'consignor_id' => ['required', 'exists:consignors,id'], 'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'], 'purchase_price' => ['required', 'numeric', 'min:0'],
             'selling_price' => ['required', 'numeric', 'gte:purchase_price'], 'condition' => ['required', 'string', 'max:50'],
             'status' => ['sometimes', Rule::in(['available', 'reserved', 'sold', 'returned'])],

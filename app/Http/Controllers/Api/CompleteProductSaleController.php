@@ -21,14 +21,14 @@ class CompleteProductSaleController extends Controller
             $product = Product::lockForUpdate()->findOrFail($product->id);
             abort_unless($product->is_draft && $product->status === 'available', 422, 'Kartu produk ini sudah dilengkapi atau terjual.');
             $product->update([
-                'name' => $request->string('name'), 'category_id' => $request->integer('category_id'),
-                'brand_id' => $request->filled('brand_id') ? $request->integer('brand_id') : null,
-                'condition' => $request->string('condition'), 'description' => $request->input('description'),
+                'name' => $request->string('name'), 'category_id' => null, 'brand_id' => null,
+                'condition' => $request->input('condition'), 'description' => $request->input('description'),
                 'purchase_price' => $request->input('purchase_price'), 'selling_price' => $request->input('sale_price'),
                 'status' => 'sold', 'is_draft' => false,
             ]);
             $this->images->store($product, $request->file('images'), $request->integer('cover_index'));
             $customer = Customer::findOrFail($request->integer('customer_id'));
+
             return Sale::create([
                 'product_id' => $product->id, 'customer_name' => $customer->name,
                 'customer_id' => $customer->id, 'customer_phone' => $customer->phone, 'sale_price' => $request->input('sale_price'),

@@ -15,8 +15,15 @@ class CheckoutController extends Controller
     {
         abort_unless($request->user()->can('manage sales'), 403);
 
+        $request->validate([
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
+        ]);
+
         $consignorId = $request->integer('consignor_id');
         $search = $request->string('search')->trim()->value();
+        $from = $request->input('from');
+        $to = $request->input('to');
 
         $orders = Order::query()
             ->with(['customer', 'sales.product.consignor', 'sales.product.images'])
@@ -25,6 +32,8 @@ class CheckoutController extends Controller
                 ->where('code', 'like', "%{$search}%")
                 ->orWhereHas('customer', fn ($customer) => $customer->where('name', 'like', "%{$search}%")->orWhere('phone', 'like', "%{$search}%"))))
             ->when($consignorId, fn ($query) => $query->whereHas('sales.product', fn ($products) => $products->where('consignor_id', $consignorId)))
+            ->when($from, fn ($query) => $query->whereDate('paid_at', '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate('paid_at', '<=', $to))
             ->get()
             ->map(fn (Order $order) => [
                 'id' => 'order-'.$order->id,
@@ -44,6 +53,8 @@ class CheckoutController extends Controller
                 ->where('customer_name', 'like', "%{$search}%")
                 ->orWhere('customer_phone', 'like', "%{$search}%")))
             ->when($consignorId, fn ($query) => $query->whereHas('product', fn ($products) => $products->where('consignor_id', $consignorId)))
+            ->when($from, fn ($query) => $query->whereDate('sold_at', '>=', $from))
+            ->when($to, fn ($query) => $query->whereDate('sold_at', '<=', $to))
             ->get()
             ->map(fn (Sale $sale) => [
                 'id' => 'sale-'.$sale->id,
