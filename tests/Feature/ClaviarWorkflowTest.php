@@ -21,6 +21,47 @@ class ClaviarWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_consignor_stock_status_can_be_set_manually(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+        $consignor = Consignor::create(['name' => 'Returned Stock']);
+
+        $this->actingAs($user, 'sanctum')->putJson("/api/consignors/{$consignor->id}", [
+            'name' => $consignor->name,
+            'stock_status' => 'returned',
+        ])->assertOk()->assertJsonPath('data.stock_status', 'returned');
+
+        $this->assertDatabaseHas('consignors', ['id' => $consignor->id, 'stock_status' => 'returned']);
+    }
+
+    public function test_consignor_with_history_can_be_deactivated_and_reactivated(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+        $consignor = Consignor::create(['name' => 'Consignor With History']);
+        Payout::create(['consignor_id' => $consignor->id, 'amount' => 100000, 'status' => 'paid', 'paid_at' => now()]);
+
+        foreach ([false, true] as $isActive) {
+            $this->actingAs($user, 'sanctum')->putJson("/api/consignors/{$consignor->id}", [
+                'name' => $consignor->name,
+                'is_active' => $isActive,
+            ])->assertOk()->assertJsonPath('data.is_active', $isActive);
+        }
+
+        $this->assertDatabaseHas('consignors', ['id' => $consignor->id, 'is_active' => true]);
+    }
+
+    public function test_inactive_consignor_cannot_receive_new_items(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+        $consignor = Consignor::create(['name' => 'Inactive Consignor', 'is_active' => false]);
+
+        $this->actingAs($user, 'sanctum')->postJson("/api/consignors/{$consignor->id}/intake", ['quantity' => 1])
+            ->assertUnprocessable();
+    }
+
     public function test_empty_consignor_can_be_deleted(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -36,25 +77,44 @@ class ClaviarWorkflowTest extends TestCase
         $this->assertDatabaseMissing('consignors', ['id' => $consignor->id]);
     }
 
-    public function test_consignor_with_related_history_cannot_be_deleted(): void
+    public function test_consignor_with_unsold_items_can_be_deleted_but_transaction_history_is_protected(): void
     {
         $this->seed(DatabaseSeeder::class);
         $user = User::where('email', 'admin@claviar.test')->firstOrFail();
 
-        $withProduct = Consignor::create(['name' => 'Product History']);
-        Product::create([
-            'code' => 'SAFE-DELETE-001', 'name' => 'Historical Product', 'consignor_id' => $withProduct->id,
+        $withUnsoldProduct = Consignor::create(['name' => 'Unsold Product']);
+        $unsoldProduct = Product::create([
+            'code' => 'SAFE-DELETE-001', 'name' => 'Unsold Product', 'consignor_id' => $withUnsoldProduct->id,
             'category_id' => Category::firstOrFail()->id, 'purchase_price' => 100000,
             'selling_price' => 150000, 'condition' => 'Good', 'status' => 'available',
         ]);
 
+        $this->actingAs($user, 'sanctum')->getJson('/api/consignors?search=Unsold%20Product')
+            ->assertOk()->assertJsonPath('data.0.can_delete', true)
+            ->assertJsonPath('data.0.ready_count', 1);
+        $this->actingAs($user, 'sanctum')->deleteJson("/api/consignors/{$withUnsoldProduct->id}")
+            ->assertNoContent();
+        $this->assertDatabaseMissing('products', ['id' => $unsoldProduct->id]);
+        $this->assertDatabaseMissing('consignors', ['id' => $withUnsoldProduct->id]);
+
+        $withSale = Consignor::create(['name' => 'Sales History']);
+        $soldProduct = Product::create([
+            'code' => 'SAFE-DELETE-002', 'name' => 'Sold Product', 'consignor_id' => $withSale->id,
+            'category_id' => Category::firstOrFail()->id, 'purchase_price' => 100000,
+            'selling_price' => 150000, 'condition' => 'Good', 'status' => 'sold',
+        ]);
+        Sale::create(['product_id' => $soldProduct->id, 'customer_name' => 'Customer', 'sale_price' => 150000, 'payment_method' => 'Cash', 'sold_at' => now()]);
+
         $withPayout = Consignor::create(['name' => 'Payout History']);
         Payout::create(['consignor_id' => $withPayout->id, 'amount' => 100000, 'status' => 'paid', 'paid_at' => now()]);
 
-        $withIntake = Consignor::create(['name' => 'Intake History']);
+        $withIntake = Consignor::create(['name' => 'Intake Without Sales']);
         IntakeBatch::create(['reference' => 'SAFE-INTAKE-001', 'consignor_id' => $withIntake->id, 'quantity' => 1]);
 
-        foreach ([$withProduct, $withPayout, $withIntake] as $consignor) {
+        $this->actingAs($user, 'sanctum')->deleteJson("/api/consignors/{$withIntake->id}")
+            ->assertNoContent();
+
+        foreach ([$withSale, $withPayout] as $consignor) {
             $this->actingAs($user, 'sanctum')->deleteJson("/api/consignors/{$consignor->id}")
                 ->assertUnprocessable();
             $this->assertDatabaseHas('consignors', ['id' => $consignor->id]);
@@ -262,6 +322,6 @@ class ClaviarWorkflowTest extends TestCase
         $checkoutResponse = $this->actingAs($user, 'sanctum')->getJson('/api/checkouts')->assertOk()->assertJsonCount(2, 'data');
         $this->assertEqualsCanonicalizing([1, 5], collect($checkoutResponse->json('data'))->pluck('items_count')->all());
         $this->assertEqualsCanonicalizing([70000, 400000], collect($checkoutResponse->json('data'))->pluck('total_amount')->all());
-        $this->assertDatabaseHas('customers',['id' => $customer['id'], 'phone' => null]);
+        $this->assertDatabaseHas('customers', ['id' => $customer['id'], 'phone' => null]);
     }
 }

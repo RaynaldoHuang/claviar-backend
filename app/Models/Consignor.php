@@ -10,9 +10,25 @@ class Consignor extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'phone', 'email', 'address', 'notes'];
+    protected $fillable = ['name', 'phone', 'email', 'address', 'notes', 'stock_status', 'is_active'];
 
-    public function products(): HasMany { return $this->hasMany(Product::class); }
-    public function payouts(): HasMany { return $this->hasMany(Payout::class); }
-    public function intakeBatches(): HasMany { return $this->hasMany(IntakeBatch::class); }
+    protected function casts(): array
+    {
+        return ['is_active' => 'boolean'];
+    }
+
+    public function products(): HasMany
+    {
+        return $this->hasMany(Product::class);
+    }
+
+    public function payouts(): HasMany
+    {
+        return $this->hasMany(Payout::class);
+    }
+
+    public function intakeBatches(): HasMany
+    {
+        return $this->hasMany(IntakeBatch::class);
+    }
 }

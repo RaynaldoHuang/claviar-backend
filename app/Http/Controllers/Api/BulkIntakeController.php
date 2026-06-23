@@ -15,6 +15,8 @@ class BulkIntakeController extends Controller
 {
     public function __invoke(BulkIntakeRequest $request, Consignor $consignor): JsonResponse
     {
+        abort_unless($consignor->is_active, 422, 'Consignor nonaktif tidak dapat menerima barang baru. Aktifkan kembali consignor terlebih dahulu.');
+
         $quantity = $request->integer('quantity');
         $batch = DB::transaction(function () use ($request, $consignor, $quantity) {
             $reference = 'INT-'.now()->format('ymd').'-'.Str::upper(Str::random(5));
@@ -26,6 +28,7 @@ class BulkIntakeController extends Controller
                 'status' => 'available', 'is_draft' => true, 'created_at' => $now, 'updated_at' => $now,
             ])->all();
             Product::insert($products);
+
             return $batch;
         });
 
