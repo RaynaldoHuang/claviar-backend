@@ -6,6 +6,8 @@ use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Consignor;
 use App\Models\Customer;
+use App\Models\IntakeBatch;
+use App\Models\Payout;
 use App\Models\Product;
 use App\Models\Sale;
 use App\Models\User;
@@ -18,6 +20,46 @@ use Tests\TestCase;
 class ClaviarWorkflowTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_empty_consignor_can_be_deleted(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+        $consignor = Consignor::create(['name' => 'Empty Consignor']);
+
+        $this->actingAs($user, 'sanctum')->getJson('/api/consignors?search=Empty%20Consignor')
+            ->assertOk()->assertJsonPath('data.0.can_delete', true);
+
+        $this->actingAs($user, 'sanctum')->deleteJson("/api/consignors/{$consignor->id}")
+            ->assertNoContent();
+
+        $this->assertDatabaseMissing('consignors', ['id' => $consignor->id]);
+    }
+
+    public function test_consignor_with_related_history_cannot_be_deleted(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+
+        $withProduct = Consignor::create(['name' => 'Product History']);
+        Product::create([
+            'code' => 'SAFE-DELETE-001', 'name' => 'Historical Product', 'consignor_id' => $withProduct->id,
+            'category_id' => Category::firstOrFail()->id, 'purchase_price' => 100000,
+            'selling_price' => 150000, 'condition' => 'Good', 'status' => 'available',
+        ]);
+
+        $withPayout = Consignor::create(['name' => 'Payout History']);
+        Payout::create(['consignor_id' => $withPayout->id, 'amount' => 100000, 'status' => 'paid', 'paid_at' => now()]);
+
+        $withIntake = Consignor::create(['name' => 'Intake History']);
+        IntakeBatch::create(['reference' => 'SAFE-INTAKE-001', 'consignor_id' => $withIntake->id, 'quantity' => 1]);
+
+        foreach ([$withProduct, $withPayout, $withIntake] as $consignor) {
+            $this->actingAs($user, 'sanctum')->deleteJson("/api/consignors/{$consignor->id}")
+                ->assertUnprocessable();
+            $this->assertDatabaseHas('consignors', ['id' => $consignor->id]);
+        }
+    }
 
     public function test_seeded_admin_can_login_and_open_dashboard(): void
     {
@@ -176,45 +218,50 @@ class ClaviarWorkflowTest extends TestCase
 
     public function test_one_payment_sells_five_cards_from_different_consignors(): void
     {
-        Storage::fake('public'); $this->seed(DatabaseSeeder::class);
-        $user=User::where('email','admin@claviar.test')->firstOrFail();
-        $customer=$this->actingAs($user,'sanctum')->postJson('/api/customers',['name'=>'No Phone Customer'])->assertCreated()->json('data');
-        $a=Consignor::create(['name'=>'Consignor A']); $b=Consignor::create(['name'=>'Consignor B']);
-        $this->actingAs($user,'sanctum')->postJson("/api/consignors/{$a->id}/intake",['quantity'=>2])->assertCreated();
-        $this->actingAs($user,'sanctum')->postJson("/api/consignors/{$b->id}/intake",['quantity'=>4])->assertCreated();
-        $ids=Product::whereIn('consignor_id',[$a->id,$b->id])->pluck('id')->all();
-        $order=$this->actingAs($user,'sanctum')->postJson('/api/orders',['customer_id'=>$customer['id'],'product_ids'=>$ids]);
-        $order->assertCreated()->assertJsonPath('data.status','pending'); $orderId=$order->json('data.id');
-        $removedId=array_shift($ids);
-        $this->actingAs($user,'sanctum')->deleteJson("/api/orders/{$orderId}/items/{$removedId}")->assertOk();
-        $this->assertDatabaseHas('products',['id'=>$removedId,'status'=>'available','is_draft'=>true]);
-        $this->assertDatabaseCount('sales',0); $this->assertSame(5,Product::where('status','reserved')->count());
-        foreach(Product::whereIn('id',$ids)->get() as $index=>$product){
-            $this->actingAs($user,'sanctum')->postJson("/api/orders/{$orderId}/items/{$product->id}",['name'=>'Order Item '.($index+1),'purchase_price'=>50000,'sale_price'=>80000])->assertOk();
+        Storage::fake('public');
+        $this->seed(DatabaseSeeder::class);
+        $user = User::where('email', 'admin@claviar.test')->firstOrFail();
+        $customer = $this->actingAs($user, 'sanctum')->postJson('/api/customers', ['name' => 'No Phone Customer'])->assertCreated()->json('data');
+        $a = Consignor::create(['name' => 'Consignor A']);
+        $b = Consignor::create(['name' => 'Consignor B']);
+        $this->actingAs($user, 'sanctum')->postJson("/api/consignors/{$a->id}/intake", ['quantity' => 2])->assertCreated();
+        $this->actingAs($user, 'sanctum')->postJson("/api/consignors/{$b->id}/intake", ['quantity' => 4])->assertCreated();
+        $ids = Product::whereIn('consignor_id', [$a->id, $b->id])->pluck('id')->all();
+        $order = $this->actingAs($user, 'sanctum')->postJson('/api/orders', ['customer_id' => $customer['id'], 'product_ids' => $ids]);
+        $order->assertCreated()->assertJsonPath('data.status', 'pending');
+        $orderId = $order->json('data.id');
+        $removedId = array_shift($ids);
+        $this->actingAs($user, 'sanctum')->deleteJson("/api/orders/{$orderId}/items/{$removedId}")->assertOk();
+        $this->assertDatabaseHas('products', ['id' => $removedId, 'status' => 'available', 'is_draft' => true]);
+        $this->assertDatabaseCount('sales', 0);
+        $this->assertSame(5, Product::where('status', 'reserved')->count());
+        foreach (Product::whereIn('id', $ids)->get() as $index => $product) {
+            $this->actingAs($user, 'sanctum')->postJson("/api/orders/{$orderId}/items/{$product->id}", ['name' => 'Order Item '.($index + 1), 'purchase_price' => 50000, 'sale_price' => 80000])->assertOk();
         }
-        $this->assertDatabaseCount('sales',0);
-        $this->actingAs($user,'sanctum')->getJson('/api/consignors?search=Consignor%20A')
-            ->assertOk()->assertJsonPath('data.0.products_count',2)
-            ->assertJsonPath('data.0.stock_count',2)->assertJsonPath('data.0.sold_count',0);
-        $this->actingAs($user,'sanctum')->postJson("/api/orders/{$orderId}/pay",['payment_method'=>'QRIS'])->assertOk()->assertJsonPath('data.status','paid');
-        $this->assertSame(5,Sale::where('order_id',$orderId)->count()); $this->assertSame(5,Product::whereIn('id',$ids)->where('status','sold')->count());
-        $this->actingAs($user,'sanctum')->getJson('/api/consignors?search=Consignor%20A')
-            ->assertOk()->assertJsonPath('data.0.products_count',2)
-            ->assertJsonPath('data.0.stock_count',1)->assertJsonPath('data.0.sold_count',1);
-        $this->actingAs($user,'sanctum')->getJson("/api/customers?consignor_id={$a->id}")
-            ->assertOk()->assertJsonPath('data.0.id',$customer['id'])
-            ->assertJsonPath('data.0.purchases_count',1)->assertJsonPath('data.0.total_spent',80000);
-        $this->actingAs($user,'sanctum')->getJson("/api/customers?consignor_id={$b->id}")
-            ->assertOk()->assertJsonPath('data.0.purchases_count',4)->assertJsonPath('data.0.total_spent',320000);
+        $this->assertDatabaseCount('sales', 0);
+        $this->actingAs($user, 'sanctum')->getJson('/api/consignors?search=Consignor%20A')
+            ->assertOk()->assertJsonPath('data.0.products_count', 2)
+            ->assertJsonPath('data.0.stock_count', 2)->assertJsonPath('data.0.sold_count', 0);
+        $this->actingAs($user, 'sanctum')->postJson("/api/orders/{$orderId}/pay", ['payment_method' => 'QRIS'])->assertOk()->assertJsonPath('data.status', 'paid');
+        $this->assertSame(5, Sale::where('order_id', $orderId)->count());
+        $this->assertSame(5, Product::whereIn('id', $ids)->where('status', 'sold')->count());
+        $this->actingAs($user, 'sanctum')->getJson('/api/consignors?search=Consignor%20A')
+            ->assertOk()->assertJsonPath('data.0.products_count', 2)
+            ->assertJsonPath('data.0.stock_count', 1)->assertJsonPath('data.0.sold_count', 1);
+        $this->actingAs($user, 'sanctum')->getJson("/api/customers?consignor_id={$a->id}")
+            ->assertOk()->assertJsonPath('data.0.id', $customer['id'])
+            ->assertJsonPath('data.0.purchases_count', 1)->assertJsonPath('data.0.total_spent', 80000);
+        $this->actingAs($user, 'sanctum')->getJson("/api/customers?consignor_id={$b->id}")
+            ->assertOk()->assertJsonPath('data.0.purchases_count', 4)->assertJsonPath('data.0.total_spent', 320000);
 
-        $secondOrder=$this->actingAs($user,'sanctum')->postJson('/api/orders',['customer_id'=>$customer['id'],'product_ids'=>[$removedId]])
+        $secondOrder = $this->actingAs($user, 'sanctum')->postJson('/api/orders', ['customer_id' => $customer['id'], 'product_ids' => [$removedId]])
             ->assertCreated();
-        $secondOrderId=$secondOrder->json('data.id');
-        $this->actingAs($user,'sanctum')->postJson("/api/orders/{$secondOrderId}/items/{$removedId}",['name'=>'Second Checkout Item','purchase_price'=>40000,'sale_price'=>70000])->assertOk();
-        $this->actingAs($user,'sanctum')->postJson("/api/orders/{$secondOrderId}/pay",['payment_method'=>'Cash'])->assertOk();
-        $checkoutResponse=$this->actingAs($user,'sanctum')->getJson('/api/checkouts')->assertOk()->assertJsonCount(2,'data');
-        $this->assertEqualsCanonicalizing([1,5],collect($checkoutResponse->json('data'))->pluck('items_count')->all());
-        $this->assertEqualsCanonicalizing([70000,400000],collect($checkoutResponse->json('data'))->pluck('total_amount')->all());
-        $this->assertDatabaseHas('customers',['id'=>$customer['id'],'phone'=>null]);
+        $secondOrderId = $secondOrder->json('data.id');
+        $this->actingAs($user, 'sanctum')->postJson("/api/orders/{$secondOrderId}/items/{$removedId}", ['name' => 'Second Checkout Item', 'purchase_price' => 40000, 'sale_price' => 70000])->assertOk();
+        $this->actingAs($user, 'sanctum')->postJson("/api/orders/{$secondOrderId}/pay", ['payment_method' => 'Cash'])->assertOk();
+        $checkoutResponse = $this->actingAs($user, 'sanctum')->getJson('/api/checkouts')->assertOk()->assertJsonCount(2, 'data');
+        $this->assertEqualsCanonicalizing([1, 5], collect($checkoutResponse->json('data'))->pluck('items_count')->all());
+        $this->assertEqualsCanonicalizing([70000, 400000], collect($checkoutResponse->json('data'))->pluck('total_amount')->all());
+        $this->assertDatabaseHas('customers',['id' => $customer['id'], 'phone' => null]);
     }
 }
