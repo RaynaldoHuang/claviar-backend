@@ -45,6 +45,7 @@ class ClaviarWorkflowTest extends TestCase
         foreach ([false, true] as $isActive) {
             $this->actingAs($user, 'sanctum')->putJson("/api/consignors/{$consignor->id}", [
                 'name' => $consignor->name,
+                'stock_status' => 'selling',
                 'is_active' => $isActive,
             ])->assertOk()->assertJsonPath('data.is_active', $isActive);
         }
